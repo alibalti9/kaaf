@@ -2,6 +2,7 @@
 import { useState, useEffect, memo } from "react";
 import { db } from "../lib/firebase";
 import { collection, addDoc } from "firebase/firestore";
+import { logHistory } from "../lib/history";
 
 // Move StandardInput outside Form and memoize it
 const StandardInput = memo(function StandardInput({ value, onChange, label, type = "text", min }) {
@@ -111,6 +112,9 @@ export default function Form({ lang, setLang, theme, setTheme, editMaterial, set
           ...(onlyNameAndExpense ? {} : { sales: parseFloat(sales) })
         });
         setSuccess("Material updated successfully!");
+        try {
+          await logHistory("is updating material");
+        } catch (_) {}
         setEditMaterial(null);
       } else {
         await addDoc(collection(db, "materials"), {
@@ -120,6 +124,9 @@ export default function Form({ lang, setLang, theme, setTheme, editMaterial, set
           ...(onlyNameAndExpense ? {} : { sales: parseFloat(sales) })
         });
         setSuccess(t.success);
+        try {
+          await logHistory("is adding material");
+        } catch (_) {}
       }
       setName("");
       setExpense("");
@@ -176,7 +183,7 @@ export default function Form({ lang, setLang, theme, setTheme, editMaterial, set
             onChange={e => setOutlet(e.target.value)}
             disabled={!!selectedOutlet}
           >
-            {outlets.map(o => <option key={o} value={o}>{o}</option>)}
+            {outlets.map((o, idx) => <option key={idx} value={o}>{o}</option>)}
           </select>
         </div>
         <StandardInput
