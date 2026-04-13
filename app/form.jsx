@@ -113,7 +113,7 @@ export default function Form({ lang, setLang, theme, setTheme, editMaterial, set
         });
         setSuccess("Material updated successfully!");
         try {
-          await logHistory("is updating material");
+          await logHistory("is updating material", undefined, name.trim());
         } catch (_) {}
         setEditMaterial(null);
       } else {
@@ -125,7 +125,7 @@ export default function Form({ lang, setLang, theme, setTheme, editMaterial, set
         });
         setSuccess(t.success);
         try {
-          await logHistory("is adding material");
+          await logHistory("is adding material", undefined, name.trim());
         } catch (_) {}
       }
       setName("");

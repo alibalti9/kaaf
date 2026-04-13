@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { db } from "@/lib/firebase";
+import { useAuth } from "./AuthProvider";
 import {
   collection,
   writeBatch,
@@ -52,6 +53,9 @@ interface SalesManagerProps {
 }
 
 export default function SalesManager({ outletId }: SalesManagerProps) {
+  const { user, userDoc } = useAuth();
+  const isAdmin = !!userDoc && userDoc.role === "admin";
+
   const [sales, setSales] = useState<Sale[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
@@ -62,6 +66,15 @@ export default function SalesManager({ outletId }: SalesManagerProps) {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Date range and creator filters
+  const toLocalDateInput = (d: Date) => {
+    const tz = d.getTimezoneOffset() * 60000;
+    return new Date(d.getTime() - tz).toISOString().slice(0, 10);
+  };
+  const todayInput = toLocalDateInput(new Date());
+  const [startDate, setStartDate] = useState<string>(todayInput);
+  const [endDate, setEndDate] = useState<string>(todayInput);
 
   const [formData, setFormData] = useState({
     productId: "",
@@ -78,15 +91,47 @@ export default function SalesManager({ outletId }: SalesManagerProps) {
   useEffect(() => {
     if (!outletId) return;
 
-    const salesQuery = query(
-      collection(db, "sales"),
+    const todayStr = toLocalDateInput(new Date());
+    const effectiveStart = isAdmin ? startDate : todayStr;
+    const effectiveEnd = isAdmin ? endDate : todayStr;
+
+    const startParts = effectiveStart.split("-");
+    const startMs = new Date(
+      Number(startParts[0]),
+      Number(startParts[1]) - 1,
+      Number(startParts[2]),
+      0,
+      0,
+      0,
+      0,
+    ).getTime();
+    const endParts = effectiveEnd.split("-");
+    const endOfDayMs = new Date(
+      Number(endParts[0]),
+      Number(endParts[1]) - 1,
+      Number(endParts[2]),
+      23,
+      59,
+      59,
+      999,
+    ).getTime();
+    const endMs = isAdmin
+      ? effectiveEnd === todayStr
+        ? Date.now()
+        : endOfDayMs
+      : Date.now();
+
+    // build sales query with date range and optional creator filter (admin only)
+    const salesConstraints: any[] = [
       where("outletId", "==", outletId),
-      // orderBy("date", "desc"),
-    );
+      where("createdAt", ">=", startMs),
+      where("createdAt", "<=", endMs),
+    ];
+    const salesQuery = query(collection(db, "sales"), ...salesConstraints);
+
     const productsQuery = query(
       collection(db, "products"),
       where("outletId", "==", outletId),
-      // orderBy("productName"),
     );
 
     const unsubSales = onSnapshot(salesQuery, (snapshot) => {
@@ -103,11 +148,18 @@ export default function SalesManager({ outletId }: SalesManagerProps) {
       setLoading(false);
     });
 
+    // also maintain list of creators for the creator filter (from all sales in outlet)
+    const creatorsQ = query(
+      collection(db, "sales"),
+      where("outletId", "==", outletId),
+    );
+
+
     return () => {
       unsubSales();
       unsubProducts();
     };
-  }, [outletId]);
+  }, [outletId, startDate, endDate, isAdmin]);
 
   const resetForm = () => {
     setFormData({
@@ -305,13 +357,13 @@ export default function SalesManager({ outletId }: SalesManagerProps) {
         discountValue,
         discountedTotalValue,
         outletId,
-        createdAt: Date.now(),
+        createdAt: Date.now() - 6 * 60 * 60 * 1000,
       });
 
       await batch.commit();
       setSuccess("Sale updated and product adjusted!");
       try {
-        await logHistory("is updating sale");
+        await logHistory("is updating sale", undefined, formData.productName);
       } catch (_) {}
       // Low-stock alerts collected; frontend will surface these on product list
       if (lowStockAlerts.length > 0) {
@@ -401,7 +453,9 @@ export default function SalesManager({ outletId }: SalesManagerProps) {
           discountedTotalValue: it.discountedTotalValue,
           outletId,
           billId,
-          createdAt: Date.now(),
+          createdAt: Date.now() - 6 * 60 * 60 * 1000,
+          createdBy:
+            userDoc && userDoc.email ? userDoc.email : user ? user.uid : null,
         });
       });
 
@@ -441,9 +495,14 @@ export default function SalesManager({ outletId }: SalesManagerProps) {
   const handleDelete = async (id: string) => {
     if (!confirm("Are you sure?")) return;
     const pwd = prompt("Enter delete password:");
-    if (pwd !== "TESTING!") {
+    if (pwd !== process.env.NEXT_PUBLIC_DELETE_PASSWORD) {
       try {
-        await logHistory("is trying to delete the sale");
+        const saleRef = doc(db, "sales", id);
+        const saleSnap = await getDoc(saleRef);
+        const prodName = saleSnap.exists()
+          ? String(saleSnap.data()?.productName || "")
+          : id;
+        await logHistory("is trying to delete the sale", undefined, prodName);
       } catch (_) {}
       setError("Incorrect password. Deletion cancelled.");
       return;
@@ -470,7 +529,11 @@ export default function SalesManager({ outletId }: SalesManagerProps) {
       await batch.commit();
       setSuccess("Sale deleted and product quantity restored!");
       try {
-        await logHistory("is deleting the sale");
+        await logHistory(
+          "is deleting the sale",
+          undefined,
+          String(saleData.productName || ""),
+        );
       } catch (_) {}
     } catch (err: any) {
       setError(err.message || "Failed to delete sale");
@@ -525,12 +588,17 @@ export default function SalesManager({ outletId }: SalesManagerProps) {
           key={`group-${billId}`}
           className="bg-green-50 dark:bg-gray-800 border-b"
         >
-          <td colSpan={6} className="px-4 py-2 font-semibold d-flex justify-between items-center w-full">
+          <td
+            colSpan={6}
+            className="px-4 py-2 font-semibold d-flex justify-between items-center w-full"
+          >
             <span>
               {billId.startsWith("bill-") ? `Bill ${billId}` : `Sale ${billId}`}{" "}
               — {sorted.length} item(s) — Total: {groupTotal.toFixed(2)}
             </span>
-            <span style={{marginLeft: 'auto'}}>{new Date(sorted[0]?.createdAt).toLocaleString()}</span>
+            <span style={{ marginLeft: "auto" }}>
+              {new Date(sorted[0]?.createdAt).toLocaleString()}
+            </span>
           </td>
         </tr>,
       );
@@ -604,6 +672,57 @@ export default function SalesManager({ outletId }: SalesManagerProps) {
           {showForm ? "Cancel" : "+ Add Sale"}
         </button>
       </div>
+
+      {isAdmin && (
+        <div className="flex gap-4 items-end mt-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">From</label>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => {
+                let v = e.target.value;
+                if (v > todayInput) v = todayInput;
+                if (v > endDate) {
+                  // extend end to match start (but not beyond today)
+                  const newEnd = v > todayInput ? todayInput : v;
+                  setEndDate(newEnd);
+                }
+                setStartDate(v);
+              }}
+              className="border rounded px-3 py-2 bg-transparent"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">To</label>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => {
+                let v = e.target.value;
+                if (v > todayInput) v = todayInput;
+                if (v < startDate) {
+                  // move start to match end if end becomes earlier
+                  setStartDate(v);
+                }
+                setEndDate(v);
+              }}
+              className="border rounded px-3 py-2 bg-transparent"
+            />
+          </div>
+          <div className="flex items-center">
+            <button
+              onClick={() => {
+                setStartDate(todayInput);
+                setEndDate(todayInput);
+              }}
+              className="px-3 py-2 bg-gray-200 rounded"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">

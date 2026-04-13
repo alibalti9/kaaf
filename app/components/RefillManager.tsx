@@ -67,7 +67,7 @@ export default function RefillManager({ outletId, productId }: { outletId?: stri
       await updateDoc(doc(db, "products", selectedProductId), { quantity: newQty });
       setSuccess("Stock refilled successfully!");
       try {
-        await logHistory(`is refilling product ${selectedProductId}`);
+        await logHistory("is refilling product", undefined, product.productName);
       } catch (_) {}
       setQuantity("");
       setSelectedProductId("");

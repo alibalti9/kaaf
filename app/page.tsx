@@ -24,6 +24,7 @@ import RefillManager from "./components/RefillManager";
 import SalesManager from "./components/SalesManager";
 import RevenuesSummary from "./components/RevenuesSummary";
 import AdminUserManager from "./components/AdminUserManager";
+import ExpenseItems from "./components/ExpenseItems";
 
 export default function Home() {
   const { user, userDoc, loading, signOut } = useAuth();
@@ -46,6 +47,7 @@ export default function Home() {
     | "refill"
     | "sales"
     | "revenue"
+    | "expense-setup"
   >("details");
   const [refillProductId, setRefillProductId] = useState<string | null>(null);
 
@@ -112,7 +114,7 @@ export default function Home() {
           city: "",
           country: "",
           description: "",
-          createdAt: Date.now(),
+          createdAt: Date.now() - 6 * 60 * 60 * 1000,
         });
         await logHistory(`is adding outlet ${name}`);
       } catch (_) {
@@ -253,6 +255,7 @@ export default function Home() {
                     { id: "refill", label: "Refill" },
                     { id: "sales", label: "Sales" },
                     { id: "revenue", label: "Revenue" },
+                    { id: "expense-setup", label: "Expense Items" },
                   ]
                 : [
                     { id: "details", label: "Details" },
@@ -260,22 +263,22 @@ export default function Home() {
                     { id: "product", label: "Product" },
                     { id: "refill", label: "Refill" },
                     { id: "sales", label: "Sales" },
-                    { id: "revenue", label: "Revenue" },
                   ]
               ).map((t) => (
                 <button
                   key={t.id}
                   onClick={() =>
                     setTab(
-                      t.id as
-                        | "details"
-                        | "users"
-                        | "expenses"
-                        | "product"
-                        | "refill"
-                        | "sales"
-                        | "revenue",
-                    )
+                        t.id as
+                          | "details"
+                          | "users"
+                          | "expenses"
+                          | "product"
+                          | "refill"
+                          | "sales"
+                          | "revenue"
+                          | "expense-setup",
+                      )
                   }
                   className={`px-4 py-2 font-semibold whitespace-nowrap transition-colors duration-200 ${
                     tab === t.id
@@ -337,6 +340,10 @@ export default function Home() {
               {/* Revenue Summary Tab */}
               {tab === "revenue" && selectedOutletId && (
                 <RevenuesSummary outletId={selectedOutletId} />
+              )}
+              {/* Expense Items management (admin only) */}
+              {tab === "expense-setup" && selectedOutletId && (
+                <ExpenseItems outletId={selectedOutletId} />
               )}
             </div>
 

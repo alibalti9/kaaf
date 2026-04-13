@@ -45,7 +45,7 @@ export default function SignUp() {
         displayName: displayName || "",
         role: "user",
         outletId: outletId || null,
-        createdAt: Date.now(),
+        createdAt: Date.now() - 6 * 60 * 60 * 1000,
       });
       try {
         await logHistory("is creating account", email);

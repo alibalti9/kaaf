@@ -8,6 +8,7 @@ import {
   updateDoc,
   deleteDoc,
   doc,
+  getDocs,
   query,
   where,
   onSnapshot,
@@ -15,6 +16,7 @@ import {
 import { logHistory } from "@/lib/history";
 import Autocomplete from '@mui/material/Autocomplete';
 import TextField from '@mui/material/TextField';
+import { useAuth } from "./AuthProvider";
 
 interface Expense {
   id: string;
@@ -29,6 +31,8 @@ interface ExpenseManagerProps {
 }
 
 export default function ExpenseManager({ outletId }: ExpenseManagerProps) {
+  const { user, userDoc } = useAuth();
+  const isAdmin = !!userDoc && userDoc.role === "admin";
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -39,13 +43,25 @@ export default function ExpenseManager({ outletId }: ExpenseManagerProps) {
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const [productOptions, setProductOptions] = useState<string[]>([]);
+  const [rawMaterialOptions, setRawMaterialOptions] = useState<string[]>([]);
+  const [inedibleOptions, setInedibleOptions] = useState<string[]>([]);
+  const [expenseOptions, setExpenseOptions] = useState<string[]>([]);
+
+  // date range and creator filter
+  const toLocalDateInput = (d: Date) => {
+    const tz = d.getTimezoneOffset() * 60000;
+    return new Date(d.getTime() - tz).toISOString().slice(0, 10);
+  };
+  const todayInput = toLocalDateInput(new Date());
+  const [startDate, setStartDate] = useState<string>(todayInput);
+  const [endDate, setEndDate] = useState<string>(todayInput);
+  const [creators, setCreators] = useState<string[]>([]);
 
   const defaultExpenseOptions = [
-    "Electricity bill",
-    "Gas bill",
-    "Water bill",
-    "Other bill",
     "Product",
+    "Raw Material",
+    "Inedible Material",
+    "Others",
   ];
 
   const [formData, setFormData] = useState({
@@ -58,13 +74,26 @@ export default function ExpenseManager({ outletId }: ExpenseManagerProps) {
   useEffect(() => {
     if (!outletId) return;
 
+    const todayStr = toLocalDateInput(new Date());
+    const effectiveStart = isAdmin ? startDate : todayStr;
+    const effectiveEnd = isAdmin ? endDate : todayStr;
+
+    const startParts = effectiveStart.split("-");
+    const startMs = new Date(Number(startParts[0]), Number(startParts[1]) - 1, Number(startParts[2]), 0, 0, 0, 0).getTime();
+    const endParts = effectiveEnd.split("-");
+    const endOfDayMs = new Date(Number(endParts[0]), Number(endParts[1]) - 1, Number(endParts[2]), 23, 59, 59, 999).getTime();
+    const endMs = isAdmin ? (effectiveEnd === todayStr ? Date.now() : endOfDayMs) : Date.now();
+
     const q = query(
       collection(db, "expenses"),
       where("outletId", "==", outletId),
-      //   orderBy("createdAt", "desc")
+      where("createdAt", ">=", startMs),
+      where("createdAt", "<=", endMs),
     );
+    // if admin and creator filter set, include it
+    const expensesQuery = isAdmin ? query(collection(db, "expenses"), where("outletId", "==", outletId), where("createdAt", ">=", startMs), where("createdAt", "<=", endMs)) : q;
 
-    const unsub = onSnapshot(q, (snapshot) => {
+    const unsub = onSnapshot(expensesQuery, (snapshot) => {
       setExpenses(
         snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() } as Expense))
       );
@@ -80,11 +109,21 @@ export default function ExpenseManager({ outletId }: ExpenseManagerProps) {
       setProductOptions(snap.docs.map((d) => String(d.data()?.productName || "")).filter(Boolean));
     });
 
+    // subscribe to expense items (raw / inedible) set in admin tab
+    const itemsQuery = query(collection(db, "expenseItems"), where("outletId", "==", outletId));
+    const unsubItems = onSnapshot(itemsQuery, (snap) => {
+      const rows = snap.docs.map((d) => (d.data() as any) || {});
+      setRawMaterialOptions(rows.filter((r: any) => r.type === "raw").map((r: any) => String(r.name || "")).filter(Boolean));
+      setInedibleOptions(rows.filter((r: any) => r.type === "inedible").map((r: any) => String(r.name || "")).filter(Boolean));
+      setExpenseOptions(rows.filter((r: any) => r.type === "expense").map((r: any) => String(r.name || "")).filter(Boolean));
+    });
+
     return () => {
       unsub();
       unsubProducts();
+      unsubItems();
     };
-  }, [outletId]);
+  }, [outletId, startDate, endDate, isAdmin]);
 
   const resetForm = () => {
     setFormData({
@@ -129,6 +168,12 @@ export default function ExpenseManager({ outletId }: ExpenseManagerProps) {
       if (formData.expenseName === "Product" && formData.rawMaterial.trim()) {
         desc = `Product: ${formData.rawMaterial}`;
       }
+      if (formData.expenseName === "Raw Material" && formData.rawMaterial.trim()) {
+        desc = `Raw Material: ${formData.rawMaterial}`;
+      }
+      if (formData.expenseName === "Inedible Material" && formData.rawMaterial.trim()) {
+        desc = `Inedible Material: ${formData.rawMaterial}`;
+      }
       if (formData.description && formData.description.trim()) {
         desc = `${desc} - ${formData.description.trim()}`;
       }
@@ -138,16 +183,21 @@ export default function ExpenseManager({ outletId }: ExpenseManagerProps) {
           amount: Number(formData.amount),
         });
         setSuccess("Expense updated successfully!");
-        await logHistory("is updating expense");
+        try {
+          await logHistory("is updating expense", undefined, desc);
+        } catch (_) {}
       } else {
         await addDoc(collection(db, "expenses"), {
           description: desc,
           amount: Number(formData.amount),
           outletId,
-          createdAt: Date.now(),
+          createdAt: Date.now() - 6 * 60 * 60 * 1000,
+          createdBy: (userDoc && userDoc.email) ? userDoc.email : (user ? user.uid : null),
         });
         setSuccess("Expense added successfully!");
-        await logHistory("is adding expense");
+        try {
+          await logHistory("is adding expense", undefined, desc);
+        } catch (_) {}
       }
       resetForm();
       setShowForm(false);
@@ -160,13 +210,32 @@ export default function ExpenseManager({ outletId }: ExpenseManagerProps) {
 
   const handleEdit = (expense: Expense) => {
     // Try to prefill expenseName/rawMaterial if it follows the stored pattern
-    const rawPrefix = "Product: ";
-    if (expense.description.startsWith(rawPrefix)) {
-      const rest = expense.description.slice(rawPrefix.length);
-      // split additional description if present
+    const prodPrefix = "Product: ";
+    const rawPrefix = "Raw Material: ";
+    const inediblePrefix = "Inedible Material: ";
+    if (expense.description.startsWith(prodPrefix)) {
+      const rest = expense.description.slice(prodPrefix.length);
       const parts = rest.split(" - ");
       setFormData({
         expenseName: "Product",
+        rawMaterial: parts[0] || "",
+        description: parts[1] || "",
+        amount: String(expense.amount),
+      });
+    } else if (expense.description.startsWith(rawPrefix)) {
+      const rest = expense.description.slice(rawPrefix.length);
+      const parts = rest.split(" - ");
+      setFormData({
+        expenseName: "Raw Material",
+        rawMaterial: parts[0] || "",
+        description: parts[1] || "",
+        amount: String(expense.amount),
+      });
+    } else if (expense.description.startsWith(inediblePrefix)) {
+      const rest = expense.description.slice(inediblePrefix.length);
+      const parts = rest.split(" - ");
+      setFormData({
+        expenseName: "Inedible Material",
         rawMaterial: parts[0] || "",
         description: parts[1] || "",
         amount: String(expense.amount),
@@ -186,9 +255,11 @@ export default function ExpenseManager({ outletId }: ExpenseManagerProps) {
   const handleDelete = async (id: string) => {
     if (!confirm("Are you sure?")) return;
     const pwd = prompt("Enter delete password:");
-    if (pwd !== "TESTING!") {
+    const expenseObj = expenses.find((e) => e.id === id);
+    const expenseName = expenseObj?.description || id;
+    if (pwd !== process.env.NEXT_PUBLIC_DELETE_PASSWORD) {
       try {
-        await logHistory("is trying to delete the expense");
+        await logHistory("is trying to delete the expense", undefined, expenseName);
       } catch (_) {}
       setError("Incorrect password. Deletion cancelled.");
       return;
@@ -199,7 +270,9 @@ export default function ExpenseManager({ outletId }: ExpenseManagerProps) {
     try {
       await deleteDoc(doc(db, "expenses", id));
       setSuccess("Expense deleted successfully!");
-        await logHistory("is deleting the expense");
+      try {
+        await logHistory("is deleting the expense", undefined, expenseName);
+      } catch (_) {}
     } catch (err: any) {
       setError(err.message || "Failed to delete expense");
     } finally {
@@ -230,6 +303,55 @@ export default function ExpenseManager({ outletId }: ExpenseManagerProps) {
         </button>
       </div>
 
+      {isAdmin && (
+        <div className="flex gap-4 items-end mt-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">From</label>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => {
+                let v = e.target.value;
+                if (v > todayInput) v = todayInput;
+                if (v > endDate) {
+                  const newEnd = v > todayInput ? todayInput : v;
+                  setEndDate(newEnd);
+                }
+                setStartDate(v);
+              }}
+              className="border rounded px-3 py-2 bg-transparent"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">To</label>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => {
+                let v = e.target.value;
+                if (v > todayInput) v = todayInput;
+                if (v < startDate) {
+                  setStartDate(v);
+                }
+                setEndDate(v);
+              }}
+              className="border rounded px-3 py-2 bg-transparent"
+            />
+          </div>
+          <div className="flex items-center">
+            <button
+              onClick={() => { 
+                setStartDate(todayInput); 
+                setEndDate(todayInput); 
+               }}
+              className="px-3 py-2 bg-gray-200 rounded"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
           {error}
@@ -256,7 +378,7 @@ export default function ExpenseManager({ outletId }: ExpenseManagerProps) {
             </label>
             <Autocomplete
               freeSolo
-              options={defaultExpenseOptions}
+              options={[...expenseOptions, ...defaultExpenseOptions]}
               value={formData.expenseName}
               onChange={(_e: any, value: any) =>
                 setFormData({ ...formData, expenseName: String(value || "") })
@@ -295,8 +417,52 @@ export default function ExpenseManager({ outletId }: ExpenseManagerProps) {
             </div>
           )}
 
+          {formData.expenseName === "Raw Material" && (
+            <div>
+              <label className="block text-sm font-medium mb-1">Raw Material</label>
+              <Autocomplete
+                freeSolo
+                options={rawMaterialOptions}
+                value={formData.rawMaterial}
+                onChange={(_e: any, value: any) =>
+                  setFormData({ ...formData, rawMaterial: String(value || "") })
+                }
+                renderInput={(params: any) => (
+                  <TextField
+                    {...params}
+                    placeholder="Select or type raw material"
+                    variant="outlined"
+                    size="small"
+                  />
+                )}
+              />
+            </div>
+          )}
+
+          {formData.expenseName === "Inedible Material" && (
+            <div>
+              <label className="block text-sm font-medium mb-1">Inedible Material</label>
+              <Autocomplete
+                freeSolo
+                options={inedibleOptions}
+                value={formData.rawMaterial}
+                onChange={(_e: any, value: any) =>
+                  setFormData({ ...formData, rawMaterial: String(value || "") })
+                }
+                renderInput={(params: any) => (
+                  <TextField
+                    {...params}
+                    placeholder="Select or type inedible item"
+                    variant="outlined"
+                    size="small"
+                  />
+                )}
+              />
+            </div>
+          )}
+
           {/* show optional description for Other/custom selections */}
-          {(formData.expenseName === "Other bill" || formData.expenseName === "Product" || (formData.expenseName && !defaultExpenseOptions.includes(formData.expenseName))) && (
+          {(formData.expenseName === "Others" || formData.expenseName === "Product" || formData.expenseName === "Raw Material" || formData.expenseName === "Inedible Material" || (formData.expenseName && !defaultExpenseOptions.includes(formData.expenseName))) && (
             <div>
               <label className="block text-sm font-medium mb-1">Additional Description (optional)</label>
               <input

@@ -2,38 +2,83 @@
 
 import { useState, useEffect } from "react";
 import { db } from "@/lib/firebase";
-import {
-  collection,
-  query,
-  where,
-  onSnapshot,
-} from "firebase/firestore";
+import { collection, query, where, onSnapshot } from "firebase/firestore";
+import { useAuth } from "./AuthProvider";
 
 interface RevenuesSummaryProps {
   outletId: string;
 }
 
 export default function RevenuesSummary({ outletId }: RevenuesSummaryProps) {
+  const { user, userDoc } = useAuth();
+  const isAdmin = !!userDoc && userDoc.role === "admin";
+
   const [sales, setSales] = useState<any[]>([]);
   const [expenses, setExpenses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // date range and creator filter
+  const toLocalDateInput = (d: Date) => {
+    const tz = d.getTimezoneOffset() * 60000;
+    return new Date(d.getTime() - tz).toISOString().slice(0, 10);
+  };
+  const todayInput = toLocalDateInput(new Date());
+  const [startDate, setStartDate] = useState<string>(todayInput);
+  const [endDate, setEndDate] = useState<string>(todayInput);
+  const [creatorFilter, setCreatorFilter] = useState<string>("");
+  const [creators, setCreators] = useState<string[]>([]);
+
   useEffect(() => {
     if (!outletId) return;
 
-    // Fetch Sales
-    const salesQuery = query(
-      collection(db, "sales"),
-      where("outletId", "==", outletId)
-    );
+    const todayStr = toLocalDateInput(new Date());
+    const effectiveStart = isAdmin ? startDate : todayStr;
+    const effectiveEnd = isAdmin ? endDate : todayStr;
+
+    const startParts = effectiveStart.split("-");
+    const startMs = new Date(
+      Number(startParts[0]),
+      Number(startParts[1]) - 1,
+      Number(startParts[2]),
+      0,
+      0,
+      0,
+      0,
+    ).getTime();
+    const endParts = effectiveEnd.split("-");
+    const endOfDayMs = new Date(
+      Number(endParts[0]),
+      Number(endParts[1]) - 1,
+      Number(endParts[2]),
+      23,
+      59,
+      59,
+      999,
+    ).getTime();
+    const endMs = isAdmin
+      ? effectiveEnd === todayStr
+        ? Date.now()
+        : endOfDayMs
+      : Date.now();
+
+    const salesConstraints: any[] = [
+      where("outletId", "==", outletId),
+      where("createdAt", ">=", startMs),
+      where("createdAt", "<=", endMs),
+    ];
+    const salesQuery = query(collection(db, "sales"), ...salesConstraints);
     const unsubSales = onSnapshot(salesQuery, (snapshot) => {
       setSales(snapshot.docs.map((doc) => doc.data()));
     });
 
-    // Fetch Expenses
+    const expensesConstraints: any[] = [
+      where("outletId", "==", outletId),
+      where("createdAt", ">=", startMs),
+      where("createdAt", "<=", endMs),
+    ];
     const expensesQuery = query(
       collection(db, "expenses"),
-      where("outletId", "==", outletId)
+      ...expensesConstraints,
     );
     const unsubExpenses = onSnapshot(expensesQuery, (snapshot) => {
       setExpenses(snapshot.docs.map((doc) => doc.data()));
@@ -44,10 +89,13 @@ export default function RevenuesSummary({ outletId }: RevenuesSummaryProps) {
       unsubSales();
       unsubExpenses();
     };
-  }, [outletId]);
+  }, [outletId, startDate, endDate, isAdmin]);
 
   const totalRevenue = sales.reduce((sum, s) => {
-    if (s.discountedTotalValue !== undefined && s.discountedTotalValue !== null) {
+    if (
+      s.discountedTotalValue !== undefined &&
+      s.discountedTotalValue !== null
+    ) {
       return sum + s.discountedTotalValue;
     }
     const subtotal = s.quantity * s.unitPrice || 0;
@@ -72,6 +120,55 @@ export default function RevenuesSummary({ outletId }: RevenuesSummaryProps) {
       <h2 className="text-2xl font-bold text-green-600 dark:text-green-300">
         Sales & Revenue Summary
       </h2>
+
+      {isAdmin && (
+        <div className="flex gap-4 items-end mt-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">From</label>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => {
+                let v = e.target.value;
+                if (v > todayInput) v = todayInput;
+                if (v > endDate) {
+                  const newEnd = v > todayInput ? todayInput : v;
+                  setEndDate(newEnd);
+                }
+                setStartDate(v);
+              }}
+              className="border rounded px-3 py-2 bg-transparent"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">To</label>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => {
+                let v = e.target.value;
+                if (v > todayInput) v = todayInput;
+                if (v < startDate) {
+                  setStartDate(v);
+                }
+                setEndDate(v);
+              }}
+              className="border rounded px-3 py-2 bg-transparent"
+            />
+          </div>
+          <div className="flex items-center">
+            <button
+              onClick={() => {
+                setStartDate(todayInput);
+                setEndDate(todayInput);
+              }}
+              className="px-3 py-2 bg-gray-200 rounded"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Total Revenue Card */}
@@ -203,7 +300,7 @@ export default function RevenuesSummary({ outletId }: RevenuesSummaryProps) {
                   style={{
                     width: `${Math.min(
                       (totalExpenses / totalRevenue) * 100,
-                      100
+                      100,
                     )}%`,
                   }}
                 ></div>

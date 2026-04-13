@@ -86,7 +86,7 @@ export default function AdminUserManager({selectedOutletId}: {selectedOutletId: 
         displayName: "",
         role: "user",
         outletId: String(newOutletId),
-        createdAt: Date.now(),
+        createdAt: Date.now() - 6 * 60 * 60 * 1000,
       });
       try {
         await logHistory(`is adding user ${newEmail}`);

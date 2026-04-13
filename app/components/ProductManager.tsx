@@ -30,9 +30,10 @@ interface Product {
 interface ProductManagerProps {
   outletId: string;
   onOpenRefill?: (productId?: string) => void;
+  user: any | null
 }
 
-export default function ProductManager({ outletId, onOpenRefill }: ProductManagerProps) {
+export default function ProductManager({ outletId, onOpenRefill, user }: ProductManagerProps) {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -133,7 +134,9 @@ export default function ProductManager({ outletId, onOpenRefill }: ProductManage
           description: formData.description,
         });
         setSuccess("Product updated successfully!");
-        await logHistory("is updating product");
+        try {
+          await logHistory("is updating product", undefined, formData.productName);
+        } catch (_) {}
       } else {
         await addDoc(collection(db, "products"), {
           productName: formData.productName,
@@ -141,11 +144,13 @@ export default function ProductManager({ outletId, onOpenRefill }: ProductManage
           unitPrice: Number(formData.unitPrice),
           minQuantity: formData.minQuantity ? Number(formData.minQuantity) : 0,
           description: formData.description,
-          createdAt: Date.now(),
+          createdAt: Date.now() - 6 * 60 * 60 * 1000,
           outletId,
         });
         setSuccess("Product added successfully!");
-        await logHistory("is adding product");
+        try {
+          await logHistory("is adding product", undefined, formData.productName);
+        } catch (_) {}
       }
       resetForm();
       setShowForm(false);
@@ -169,11 +174,13 @@ export default function ProductManager({ outletId, onOpenRefill }: ProductManage
   };
 
   const handleDelete = async (id: string) => {
+    const productObj = products.find((p) => p.id === id);
+    const productName = productObj?.productName || id;
     if (!confirm("Are you sure you want to delete this product?")) return;
     const pwd = prompt("Enter delete password:");
-    if (pwd !== "TESTING!") {
+    if (pwd !== process.env.NEXT_PUBLIC_DELETE_PASSWORD) {
       try {
-        await logHistory("is trying to delete the product");
+        await logHistory("is trying to delete the product", undefined, productName);
       } catch (_) {
         // ignore
       }
@@ -186,7 +193,9 @@ export default function ProductManager({ outletId, onOpenRefill }: ProductManage
       setSuccess("");
       await deleteDoc(doc(db, "products", id));
       setSuccess("Product deleted successfully!");
-        await logHistory("is deleting the product");
+      try {
+        await logHistory("is deleting the product", undefined, productName);
+      } catch (_) {}
     } catch (err: any) {
       setError(err.message || "Failed to delete product");
     } finally {
@@ -234,7 +243,9 @@ export default function ProductManager({ outletId, onOpenRefill }: ProductManage
         quantity: newQty,
       });
       setSuccess("Product quantity updated successfully!");
-        await logHistory("is adding quantity to product");
+      try {
+        await logHistory("is adding quantity to product", undefined, product.productName);
+      } catch (_) {}
       cancelInlineEdit();
     } catch (err: any) {
       setError(err.message || "Failed to update product");
@@ -284,7 +295,7 @@ export default function ProductManager({ outletId, onOpenRefill }: ProductManage
         <h2 className="text-2xl font-bold text-green-600 dark:text-green-300">
           Product Management
         </h2>
-        <button
+        {user?.role === "admin" && <button
           onClick={() => {
             if (showForm) {
               resetForm();
@@ -296,7 +307,7 @@ export default function ProductManager({ outletId, onOpenRefill }: ProductManage
           className="px-4 py-2 bg-green-500 text-white rounded font-semibold hover:bg-green-600 transition-colors"
         >
           {showForm ? "Cancel" : "+ Add Product"}
-        </button>
+        </button>}
       </div>
 
       {error && (
