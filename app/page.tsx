@@ -316,6 +316,7 @@ export default function Home() {
               {/* Product Tab */}
               {tab === "product" && selectedOutletId && (
                 <ProductManager
+                  user={userDoc}
                   outletId={selectedOutletId}
                   onOpenRefill={(pid) => {
                     setRefillProductId(pid || null);
